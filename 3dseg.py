@@ -43,6 +43,7 @@ from glob import glob
 from monai.data import partition_dataset
 from torch.utils.data import RandomSampler
 from dataset import BrainTumourData
+from torch.utils.tensorboard import SummaryWriter
 print_config()
 
 
@@ -152,7 +153,7 @@ model = UNet(
     spatial_dims=3,
     in_channels=3,
     out_channels=3,
-    channels=(4,8,16),
+    channels=(4,8,16), 
     strides=(2,2),
     kernel_size=3, 
     up_kernel_size=3,
@@ -164,6 +165,8 @@ model = UNet(
 loss_function = DiceLoss(smooth_nr=0, smooth_dr=1e-5, squared_pred=True, to_onehot_y=False, sigmoid=True)
 optimizer = torch.optim.Adam(model.parameters(), 1e-4, weight_decay=1e-5)
 lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs)
+writer = SummaryWriter()
+
 
 dice_metric = DiceMetric(include_background=True, reduction="mean")
 dice_metric_batch = DiceMetric(include_background=True, reduction="mean_batch")
@@ -242,6 +245,7 @@ for epoch in range(max_epochs):
     epoch_loss /= step
     epoch_loss_values.append(epoch_loss)
     print(f"epoch {epoch + 1} average loss: {epoch_loss:.4f}")
+    writer.add_scalar('Train Loss / Epoch', epoch_loss, epoch)
 
     if (epoch + 1) % val_interval == 0:
         model.eval()
@@ -288,6 +292,11 @@ for epoch in range(max_epochs):
                 f"\nbest mean dice: {best_metric:.4f}"
                 f" at epoch: {best_metric_epoch}"
             )
+            writer.add_scalar("Dice Score / Epoch", metric, epoch)
+            writer.add_scalar("TC Score / Epoch", metric_tc, epoch)
+            writer.add_scalar("WT Score / Epoch", metric_wt, epoch)
+            writer.add_scalar("ET Score / Epoch", metric_et, epoch)
+            
     print(f"time consuming of epoch {epoch + 1} is: {(time.time() - epoch_start):.4f}")
 total_time = time.time() - total_start
 
