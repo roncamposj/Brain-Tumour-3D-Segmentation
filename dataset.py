@@ -145,8 +145,8 @@ class BrainTumourData():
 
         # sampler = RandomSampler(dataset, replacement=True, num_samples=int(0.8*len(dataset)))
 
-        train_loader = DataLoader(train_ds, batch_size=4, num_workers=4, shuffle=True)
-        val_loader = DataLoader(val_ds, batch_size=4, num_workers=4, shuffle=True)
+        train_loader = DataLoader(train_ds, batch_size=1, num_workers=4, shuffle=True)
+        val_loader = DataLoader(val_ds, batch_size=1, num_workers=4, shuffle=True)
 
         return train_ds, val_ds, train_loader, val_loader
 
