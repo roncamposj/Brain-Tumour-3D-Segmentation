@@ -310,4 +310,4 @@ def train():
 
     print(f"train completed, best_metric: {best_metric:.4f} and Hausdorff Dist: {best_hd:.4f} at epoch: {best_metric_epoch}, total time: {total_time}.")
 
-    train()
+train()
