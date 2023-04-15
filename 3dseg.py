@@ -44,6 +44,7 @@ from monai.data import partition_dataset
 from torch.utils.data import RandomSampler
 from dataset import BrainTumourData
 from torch.utils.tensorboard import SummaryWriter
+import metric_bin as mb
 print_config()
 
 
@@ -60,12 +61,14 @@ VAL_AMP = True
 # standard PyTorch program style: create SegResNet, DiceLoss and Adam optimizer
 device = torch.device("cuda:0")
 
+
+
 class ConvertToMultiChannelBasedOnBratsClassesd(MapTransform):
     """
     Convert labels to multi channels based on brats classes:
     label 1 is the peritumoral edema
-    label 2 is the GD-enhancing tumor
-    label 3 is the necrotic and non-enhancing tumor core
+    label 2 is the necrotic and non-enhancing tumor core
+    label 3 is the GD-enhancing tumor
     The possible classes are TC (Tumor core), WT (Whole tumor)
     and ET (Enhancing tumor).
 
@@ -79,8 +82,8 @@ class ConvertToMultiChannelBasedOnBratsClassesd(MapTransform):
             result.append(torch.logical_or(d[key] == 2, d[key] == 3))
             # merge labels 1, 2 and 3 to construct WT
             result.append(torch.logical_or(torch.logical_or(d[key] == 2, d[key] == 3), d[key] == 1))
-            # label 2 is ET
-            result.append(d[key] == 2)
+            # label 3 is ET
+            result.append(d[key] == 3)
             d[key] = torch.stack(result, axis=0).float()
         return d
 
@@ -130,9 +133,9 @@ train_ds = DecathlonDataset(
     section="training",
     download=True,
     cache_rate=0.0,
-    num_workers=4,
+    num_workers=12,
 )
-train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=4)
+train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=8)
 val_ds = DecathlonDataset(
     root_dir=root_dir,
     task="Task01_BrainTumour",
@@ -140,9 +143,9 @@ val_ds = DecathlonDataset(
     section="validation",
     download=False,
     cache_rate=0.0,
-    num_workers=4,
+    num_workers=12,
 )
-val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=4)
+val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=8)
 
 
 from monai.networks.nets import UNet
@@ -151,19 +154,21 @@ print(UNet)
 
 model = UNet(
     spatial_dims=3,
-    in_channels=3,
+    in_channels=4,
     out_channels=3,
-    channels=(4,8,16), 
-    strides=(2,2),
+    channels=(16, 32, 64, 128), 
+    strides=(2,2,2),
     kernel_size=3, 
     up_kernel_size=3,
-    act='PRELU',
+    act='RELU',
     norm='INSTANCE',
+    num_res_units=2
+
 ).to(device)
 
 
 loss_function = DiceLoss(smooth_nr=0, smooth_dr=1e-5, squared_pred=True, to_onehot_y=False, sigmoid=True)
-optimizer = torch.optim.Adam(model.parameters(), 1e-4, weight_decay=1e-5)
+optimizer = torch.optim.Adam(model.parameters(), 1e-4, weight_decay=1e-4)
 lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs)
 writer = SummaryWriter()
 
@@ -192,113 +197,117 @@ def inference(input):
         return _compute(input)
 
 
-# use amp to accelerate training
-scaler = torch.cuda.amp.GradScaler()
-# enable cuDNN benchmark
-torch.backends.cudnn.benchmark = True
+def train():
+    # use amp to accelerate training
+    scaler = torch.cuda.amp.GradScaler()
+    # enable cuDNN benchmark
+    torch.backends.cudnn.benchmark = True
 
-best_metric = -1
-best_metric_epoch = -1
-best_metrics_epochs_and_time = [[], [], []]
-epoch_loss_values = []
-metric_values = []
-metric_values_tc = []
-metric_values_wt = []
-metric_values_et = []
+    best_metric = -1
+    best_metric_epoch = -1
+    best_hd = -1
+    hd_metric = -1
+    best_metrics_epochs_and_time = [[], [], []]
+    epoch_loss_values = []
+    metric_values = []
+    metric_values_tc = []
+    metric_values_wt = []
+    metric_values_et = []
 
-total_start = time.time()
-for epoch in range(max_epochs):
-    epoch_start = time.time()
-    print("-" * 10)
-    print(f"epoch {epoch + 1}/{max_epochs}")
-    model.train()
-    epoch_loss = 0
-    step = 0
-    for batch_data in train_loader:
-        step_start = time.time()
-        step += 1
-        inputs, labels = (
-            batch_data["image"].to(device),
-            batch_data["label"].to(device),
-        )
-
-        inputs = inputs[:,:3,:,:,:]
-        # labels = labels[:,:3,:,:,:]
-        # print(inputs.shape)
-        # print(labels.shape)
-
-
-        optimizer.zero_grad()
-        with torch.cuda.amp.autocast():
-            outputs = model(inputs)
-            loss = loss_function(outputs, labels)
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        epoch_loss += loss.item()
-        print(
-            f"{step}/{len(train_ds) // train_loader.batch_size}"
-            f", train_loss: {loss.item():.4f}"
-            f", step time: {(time.time() - step_start):.4f}"
-        )
-    lr_scheduler.step()
-    epoch_loss /= step
-    epoch_loss_values.append(epoch_loss)
-    print(f"epoch {epoch + 1} average loss: {epoch_loss:.4f}")
-    writer.add_scalar('Train Loss / Epoch', epoch_loss, epoch)
-
-    if (epoch + 1) % val_interval == 0:
-        model.eval()
-        with torch.no_grad():
-
-            for val_data in val_loader:
-                val_inputs, val_labels = (
-                    val_data["image"].to(device),
-                    val_data["label"].to(device),
-                )
-                val_inputs = val_inputs[:,:3,:,:,:]
-
-                val_outputs = inference(val_inputs)
-                val_outputs = [post_trans(i) for i in decollate_batch(val_outputs)]
-                dice_metric(y_pred=val_outputs, y=val_labels)
-                dice_metric_batch(y_pred=val_outputs, y=val_labels)
-
-            metric = dice_metric.aggregate().item()
-            metric_values.append(metric)
-            metric_batch = dice_metric_batch.aggregate()
-            metric_tc = metric_batch[0].item()
-            metric_values_tc.append(metric_tc)
-            metric_wt = metric_batch[1].item()
-            metric_values_wt.append(metric_wt)
-            metric_et = metric_batch[2].item()
-            metric_values_et.append(metric_et)
-            dice_metric.reset()
-            dice_metric_batch.reset()
-
-            if metric > best_metric:
-                best_metric = metric
-                best_metric_epoch = epoch + 1
-                best_metrics_epochs_and_time[0].append(best_metric)
-                best_metrics_epochs_and_time[1].append(best_metric_epoch)
-                best_metrics_epochs_and_time[2].append(time.time() - total_start)
-                torch.save(
-                    model.state_dict(),
-                    os.path.join('saved_models', 'best_metric_model.pth'),
-                )
-                print("saved new best metric model")
-            print(
-                f"current epoch: {epoch + 1} current mean dice: {metric:.4f}"
-                f" tc: {metric_tc:.4f} wt: {metric_wt:.4f} et: {metric_et:.4f}"
-                f"\nbest mean dice: {best_metric:.4f}"
-                f" at epoch: {best_metric_epoch}"
+    total_start = time.time()
+    for epoch in range(max_epochs):
+        epoch_start = time.time()
+        print("-" * 10)
+        print(f"epoch {epoch + 1}/{max_epochs}")
+        model.train()
+        epoch_loss = 0
+        step = 0
+        for batch_data in train_loader:
+            step_start = time.time()
+            step += 1
+            inputs, labels = (
+                batch_data["image"].to(device),
+                batch_data["label"].to(device),
             )
-            writer.add_scalar("Dice Score / Epoch", metric, epoch)
-            writer.add_scalar("TC Score / Epoch", metric_tc, epoch)
-            writer.add_scalar("WT Score / Epoch", metric_wt, epoch)
-            writer.add_scalar("ET Score / Epoch", metric_et, epoch)
-            
-    print(f"time consuming of epoch {epoch + 1} is: {(time.time() - epoch_start):.4f}")
-total_time = time.time() - total_start
+
+            # inputs = inputs[:,:3,:,:,:]
+
+            optimizer.zero_grad()
+            with torch.cuda.amp.autocast():
+                outputs = model(inputs)
+                loss = loss_function(outputs, labels)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            epoch_loss += loss.item()
+            print(
+                f"{step}/{len(train_ds) // train_loader.batch_size}"
+                f", train_loss: {loss.item():.4f}"
+                f", step time: {(time.time() - step_start):.4f}"
+            )
+        lr_scheduler.step()
+        epoch_loss /= step
+        epoch_loss_values.append(epoch_loss)
+        print(f"epoch {epoch + 1} average loss: {epoch_loss:.4f}")
+        writer.add_scalar('Train Loss / Epoch', epoch_loss, epoch)
+
+        if (epoch + 1) % val_interval == 0:
+            model.eval()
+            with torch.no_grad():
+
+                for val_data in val_loader:
+                    val_inputs, val_labels = (
+                        val_data["image"].to(device),
+                        val_data["label"].to(device),
+                    )
+                    # val_inputs = val_inputs[:,:3,:,:,:]
+
+                    val_outputs = inference(val_inputs)
+                    val_outputs = [post_trans(i) for i in decollate_batch(val_outputs)]
+                    dice_metric(y_pred=val_outputs, y=val_labels)
+                    dice_metric_batch(y_pred=val_outputs, y=val_labels)
+
+                        
+
+                metric = dice_metric.aggregate().item()
+                metric_values.append(metric)
+                metric_batch = dice_metric_batch.aggregate()
+                metric_tc = metric_batch[0].item()
+                metric_values_tc.append(metric_tc)
+                metric_wt = metric_batch[1].item()
+                metric_values_wt.append(metric_wt)
+                metric_et = metric_batch[2].item()
+                metric_values_et.append(metric_et)
+                dice_metric.reset()
+                dice_metric_batch.reset()
+
+                if metric > best_metric:
+                    best_metric = metric
+                    best_hd = mb.hd(val_outputs[0].cpu().numpy(), val_labels.cpu().numpy().squeeze(0))
+                    best_metric_epoch = epoch + 1
+                    best_metrics_epochs_and_time[0].append(best_metric)
+                    best_metrics_epochs_and_time[1].append(best_metric_epoch)
+                    best_metrics_epochs_and_time[2].append(time.time() - total_start)
+                    torch.save(
+                        model.state_dict(),
+                        os.path.join('saved_models', 'best_metric_model.pth'),
+                    )
+                    print("saved new best metric model")
+                print(
+                    f"current epoch: {epoch + 1} current mean dice: {metric:.4f}"
+                    f" tc: {metric_tc:.4f} wt: {metric_wt:.4f} et: {metric_et:.4f}"
+                    f"\nbest mean dice: {best_metric:.4f}"
+                    f" at epoch: {best_metric_epoch}"
+                )
+                writer.add_scalar("Dice Score / Epoch", metric, epoch)
+                writer.add_scalar("TC Score / Epoch", metric_tc, epoch)
+                writer.add_scalar("WT Score / Epoch", metric_wt, epoch)
+                writer.add_scalar("ET Score / Epoch", metric_et, epoch)
+                
+        print(f"time consuming of epoch {epoch + 1} is: {(time.time() - epoch_start):.4f}")
+    total_time = time.time() - total_start
 
 
-print(f"train completed, best_metric: {best_metric:.4f} at epoch: {best_metric_epoch}, total time: {total_time}.")
+    print(f"train completed, best_metric: {best_metric:.4f} and Hausdorff Dist: {best_hd:.4f} at epoch: {best_metric_epoch}, total time: {total_time}.")
+
+    train()
