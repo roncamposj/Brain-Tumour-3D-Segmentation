@@ -151,12 +151,14 @@ val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=8)
 from monai.networks.nets import UNet
 
 print(UNet)
+channel_seq = (16, 32, 64, 128)
+print(f'channels in U-Net{channel_seq}')
 
 model = UNet(
     spatial_dims=3,
     in_channels=4,
     out_channels=3,
-    channels=(16, 32, 64, 128), 
+    channels=channel_seq, 
     strides=(2,2,2),
     kernel_size=3, 
     up_kernel_size=3,
@@ -165,7 +167,6 @@ model = UNet(
     num_res_units=2
 
 ).to(device)
-
 
 loss_function = DiceLoss(smooth_nr=0, smooth_dr=1e-5, squared_pred=True, to_onehot_y=False, sigmoid=True)
 optimizer = torch.optim.Adam(model.parameters(), 1e-4, weight_decay=1e-4)
@@ -206,6 +207,9 @@ def train():
     best_metric = -1
     best_metric_epoch = -1
     best_hd = -1
+    best_tc = -1
+    best_wt = -1
+    best_et = -1
     hd_metric = -1
     best_metrics_epochs_and_time = [[], [], []]
     epoch_loss_values = []
@@ -283,6 +287,9 @@ def train():
 
                 if metric > best_metric:
                     best_metric = metric
+                    best_tc = metric_tc
+                    best_wt = metric_wt
+                    best_et = metric_et
                     best_hd = mb.hd(val_outputs[0].cpu().numpy(), val_labels.cpu().numpy().squeeze(0))
                     best_metric_epoch = epoch + 1
                     best_metrics_epochs_and_time[0].append(best_metric)
@@ -309,5 +316,19 @@ def train():
 
 
     print(f"train completed, best_metric: {best_metric:.4f} and Hausdorff Dist: {best_hd:.4f} at epoch: {best_metric_epoch}, total time: {total_time}.")
+    return best_metric, best_tc, best_wt, best_et, best_hd
 
-train()
+
+dice_5fold = []
+dice_tc_5fold = []
+dice_wt_5fold = []
+dice_et_5fold = []
+hd_5fold = []
+cross_validation = 2
+for i in range(cross_validation):
+    dice, dice_tc, dice_wt, dice_et, best_hd = train()
+    dice_5fold.append(dice)
+    dice_tc_5fold.append(dice_tc)
+    dice_wt_5fold.append(dice_wt)
+    dice_et_5fold.append(dice_et)
+    hd_5fold.append(best_hd)
