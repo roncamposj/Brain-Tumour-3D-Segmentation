@@ -332,3 +332,10 @@ for i in range(cross_validation):
     dice_wt_5fold.append(dice_wt)
     dice_et_5fold.append(dice_et)
     hd_5fold.append(best_hd)
+
+dice_5fold = np.array(dice_5fold)
+dice_tc_5fold = np.array(dice_tc_5fold)
+dice_wt_5fold = np.array(dice_wt_5fold)
+dice_et_5fold = np.array(dice_et_5fold)
+hd_5fold = np.array(hd_5fold)
+np.savez('metrics.npz', dice_5fold=dice_5fold, dice_et_5fold=dice_et_5fold, dice_tc_5fold=dice_tc_5fold, dice_wt_5fold=dice_wt_5fold, hd_5fold=hd_5fold)
