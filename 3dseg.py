@@ -54,7 +54,7 @@ print(root_dir)
 set_determinism(seed=0)
 
 
-max_epochs = 300
+max_epochs = 200
 val_interval = 1
 VAL_AMP = True
 
@@ -244,11 +244,12 @@ def train():
             scaler.step(optimizer)
             scaler.update()
             epoch_loss += loss.item()
-            print(
-                f"{step}/{len(train_ds) // train_loader.batch_size}"
-                f", train_loss: {loss.item():.4f}"
-                f", step time: {(time.time() - step_start):.4f}"
-            )
+            if step % 10 == 0 or step == len(train_ds) // train_loader.batch_size:
+                print(
+                    f"{step}/{len(train_ds) // train_loader.batch_size}"
+                    f", train_loss: {loss.item():.4f}"
+                    f", step time: {(time.time() - step_start):.4f}"
+                )
         lr_scheduler.step()
         epoch_loss /= step
         epoch_loss_values.append(epoch_loss)
@@ -324,7 +325,7 @@ dice_tc_5fold = []
 dice_wt_5fold = []
 dice_et_5fold = []
 hd_5fold = []
-cross_validation = 2
+cross_validation = 5
 for i in range(cross_validation):
     dice, dice_tc, dice_wt, dice_et, best_hd = train()
     dice_5fold.append(dice)
