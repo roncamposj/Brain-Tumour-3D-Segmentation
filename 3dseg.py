@@ -54,7 +54,7 @@ print(root_dir)
 set_determinism(seed=0)
 
 
-max_epochs = 200
+max_epochs = 150
 val_interval = 1
 VAL_AMP = True
 
