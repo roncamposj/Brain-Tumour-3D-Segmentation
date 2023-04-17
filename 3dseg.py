@@ -54,7 +54,7 @@ print(root_dir)
 set_determinism(seed=0)
 
 
-max_epochs = 150
+max_epochs = 75
 val_interval = 1
 VAL_AMP = True
 
@@ -133,9 +133,9 @@ train_ds = DecathlonDataset(
     section="training",
     download=True,
     cache_rate=0.0,
-    num_workers=12,
+    num_workers=4,
 )
-train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=8)
+train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=4)
 val_ds = DecathlonDataset(
     root_dir=root_dir,
     task="Task01_BrainTumour",
@@ -143,9 +143,9 @@ val_ds = DecathlonDataset(
     section="validation",
     download=False,
     cache_rate=0.0,
-    num_workers=12,
+    num_workers=4,
 )
-val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=8)
+val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=4)
 
 
 from monai.networks.nets import UNet
