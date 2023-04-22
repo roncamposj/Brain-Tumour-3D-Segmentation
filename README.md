@@ -6,4 +6,5 @@ python -m 3dseg
 ```
 
 ## To observe results: ##
-view or run ```load_and_plot.ipynb```. This notebook uses results from saved 5-fold cross validation run, saved in ```metrics.npz```.
+View or run ```load_and_plot.ipynb```. 
+This notebook uses results from saved 5-fold cross validation run, saved in ```metrics.npz```.
